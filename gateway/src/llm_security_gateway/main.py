@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 from llm_security_gateway.api.middleware.audit_log import AuditLogMiddleware, audit_log_worker
 from llm_security_gateway.api.middleware.rate_limit import RateLimitMiddleware
 from llm_security_gateway.api.middleware.request_id import RequestIDMiddleware
-from llm_security_gateway.api.routes import chat, health
+from llm_security_gateway.api.routes import admin, chat, health, metrics
 from llm_security_gateway.config import GatewaySettings
 from llm_security_gateway.storage.database import dispose_db, get_session, init_db
 
@@ -85,6 +85,8 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     # ── Routers ───────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(chat.router)
+    app.include_router(metrics.router)
+    app.include_router(admin.router)
 
     return app
 

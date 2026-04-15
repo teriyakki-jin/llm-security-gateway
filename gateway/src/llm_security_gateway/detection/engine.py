@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from llm_security_gateway.detection.result import DetectionResult, DetectorOutput
+from llm_security_gateway.metrics import detection_latency_seconds, detection_requests_total
 
 if TYPE_CHECKING:
     from llm_security_gateway.detection.base import BaseDetector
@@ -100,6 +101,14 @@ class DetectionEngine:
 
         latency_ms = (time.perf_counter() - start) * 1000
 
+        # ── Prometheus metrics ────────────────────────────────────
+        detection_latency_seconds.observe(latency_ms / 1000.0)
+        if would_block:
+            action = "shadow_blocked" if self._shadow_mode else "blocked"
+        else:
+            action = "passed"
+        detection_requests_total.labels(action=action).inc()
+
         if would_block:
             self._emit_detection_log(
                 request_id=request_id,
@@ -122,10 +131,19 @@ class DetectionEngine:
     def shadow_mode(self) -> bool:
         return self._shadow_mode
 
+    @property
+    def threshold(self) -> float:
+        return self._threshold
+
     def set_shadow_mode(self, enabled: bool) -> None:
         """Toggle shadow mode at runtime (e.g., via admin API)."""
         self._shadow_mode = enabled
         logger.info("shadow_mode_changed", enabled=enabled)
+
+    def set_threshold(self, threshold: float) -> None:
+        """Adjust the blocking threshold at runtime (e.g., via admin API)."""
+        self._threshold = threshold
+        logger.info("threshold_changed", threshold=threshold)
 
     @staticmethod
     def _emit_detection_log(

@@ -1,5 +1,8 @@
 """OpenAI API client."""
 
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from llm_security_gateway.llm_clients.base import BaseLLMClient, LLMResponse, Message, Usage
@@ -54,6 +57,36 @@ class OpenAIClient(BaseLLMClient):
             ),
             raw_response=data,
         )
+
+    async def stream_chat(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 1.0,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        payload: dict = {
+            "model": model or self._default_model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        async with self._client.stream("POST", "/chat/completions", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:]
+                if raw == "[DONE]":
+                    break
+                chunk = json.loads(raw)
+                delta = chunk["choices"][0].get("delta", {})
+                if content := delta.get("content"):
+                    yield content
 
     async def health(self) -> bool:
         try:

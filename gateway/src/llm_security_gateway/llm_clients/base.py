@@ -1,6 +1,7 @@
 """Abstract base class for LLM provider clients."""
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 
@@ -36,6 +37,17 @@ class BaseLLMClient(ABC):
         max_tokens: int | None = None,
     ) -> LLMResponse:
         """Send a chat completion request and return the response."""
+
+    @abstractmethod
+    async def stream_chat(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 1.0,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream chat completion, yielding text deltas as they arrive."""
 
     @abstractmethod
     async def health(self) -> bool:

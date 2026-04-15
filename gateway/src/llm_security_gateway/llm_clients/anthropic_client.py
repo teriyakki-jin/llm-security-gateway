@@ -1,5 +1,8 @@
 """Anthropic (Claude) API client."""
 
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from llm_security_gateway.llm_clients.base import BaseLLMClient, LLMResponse, Message, Usage
@@ -61,6 +64,41 @@ class AnthropicClient(BaseLLMClient):
             ),
             raw_response=data,
         )
+
+    async def stream_chat(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 1.0,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        system_parts = [m.content for m in messages if m.role == "system"]
+        non_system = [m for m in messages if m.role != "system"]
+
+        payload: dict = {
+            "model": model or self._default_model,
+            "messages": [{"role": m.role, "content": m.content} for m in non_system],
+            "max_tokens": max_tokens or 4096,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+
+        async with self._client.stream("POST", "/messages", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:]
+                if raw == "[DONE]":
+                    break
+                event = json.loads(raw)
+                if event.get("type") == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        yield delta.get("text", "")
 
     async def health(self) -> bool:
         try:
