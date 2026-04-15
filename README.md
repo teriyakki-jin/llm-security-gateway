@@ -158,7 +158,7 @@ curl -X POST http://localhost:8000/admin/shadow-mode \
 | GET | `/health` | 헬스체크 |
 | GET | `/metrics` | Prometheus 메트릭 |
 | POST | `/admin/shadow-mode` | Shadow Mode 토글 |
-| PUT | `/admin/threshold` | 차단 임계값 조정 |
+| POST | `/admin/threshold` | 차단 임계값 조정 |
 | GET | `/admin/stats` | 탐지 통계 |
 
 ### PQC Proxy (`:8443`)
