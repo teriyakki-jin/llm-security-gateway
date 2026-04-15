@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.log
+
+# Go
+pqc-proxy/bin/
+pqc-proxy/vendor/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# ML models (tracked via DVC)
+gateway/ml/models/*.onnx
+gateway/ml/models/*.pt
+gateway/ml/models/*.bin
+gateway/ml/data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.tar

@@ -1,0 +1,121 @@
+name: CI - Go PQC Proxy
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ["pqc-proxy/**", ".github/workflows/ci-go.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["pqc-proxy/**"]
+
+defaults:
+  run:
+    working-directory: pqc-proxy
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: pqc-proxy/go.sum
+
+      - name: Install liboqs
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOQS_ALGS_ENABLED=ML_KEM \
+            -DBUILD_SHARED_LIBS=OFF \
+            -GNinja
+          sudo cmake --build /tmp/liboqs/build
+          sudo cmake --install /tmp/liboqs/build
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59
+          working-directory: pqc-proxy
+
+      - name: gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec ./...
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: pqc-proxy/go.sum
+
+      - name: Install liboqs
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOQS_ALGS_ENABLED=ML_KEM \
+            -DBUILD_SHARED_LIBS=OFF \
+            -GNinja
+          sudo cmake --build /tmp/liboqs/build
+          sudo cmake --install /tmp/liboqs/build
+
+      - name: Run tests
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: "-I/usr/local/include"
+          CGO_LDFLAGS: "-L/usr/local/lib -loqs -lssl -lcrypto"
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Check coverage
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Coverage: $COVERAGE%"
+          awk "BEGIN { if ($COVERAGE < 80) { print \"Coverage below 80%\"; exit 1 } }"
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: pqc-proxy/go.sum
+
+      - name: Install liboqs
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOQS_ALGS_ENABLED=ML_KEM \
+            -DBUILD_SHARED_LIBS=OFF \
+            -GNinja
+          sudo cmake --build /tmp/liboqs/build
+          sudo cmake --install /tmp/liboqs/build
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: "-I/usr/local/include"
+          CGO_LDFLAGS: "-L/usr/local/lib -loqs -lssl -lcrypto"
+        run: go build -o bin/pqc-proxy ./cmd/proxy
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqc-proxy-linux-amd64
+          path: pqc-proxy/bin/pqc-proxy
