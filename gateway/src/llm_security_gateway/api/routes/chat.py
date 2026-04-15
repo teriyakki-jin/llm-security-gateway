@@ -15,7 +15,7 @@ from llm_security_gateway.detection.data_leakage.response_filter import Response
 from llm_security_gateway.detection.engine import DetectionEngine
 from llm_security_gateway.llm_clients.base import BaseLLMClient, Message
 from llm_security_gateway.llm_clients.factory import create_client
-from llm_security_gateway.metrics import llm_latency_seconds, llm_requests_total
+from llm_security_gateway.metrics import llm_latency_seconds, llm_requests_total, llm_tokens_total
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -106,7 +106,7 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as exc:
-        llm_requests_total.labels(provider=settings.default_provider, status="error").inc()
+        llm_requests_total.labels(provider=settings.default_provider, status_code="500").inc()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM provider error: {exc}",
@@ -132,8 +132,18 @@ async def _handle_blocking(
         temperature=body.temperature,
         max_tokens=body.max_tokens,
     )
-    llm_latency_seconds.observe(time.perf_counter() - t0)
-    llm_requests_total.labels(provider=settings.default_provider, status="success").inc()
+    llm_latency_seconds.labels(provider=settings.default_provider).observe(time.perf_counter() - t0)
+    llm_requests_total.labels(provider=settings.default_provider, status_code="200").inc()
+    llm_tokens_total.labels(
+        provider=settings.default_provider,
+        model=llm_response.model,
+        type="prompt",
+    ).inc(llm_response.usage.prompt_tokens)
+    llm_tokens_total.labels(
+        provider=settings.default_provider,
+        model=llm_response.model,
+        type="completion",
+    ).inc(llm_response.usage.completion_tokens)
 
     content = llm_response.content
     if settings.detection_enabled:
@@ -190,14 +200,14 @@ async def _handle_streaming(
                 yield f"data: {json.dumps(event)}\n\n"
 
         except Exception as exc:
-            llm_requests_total.labels(provider=provider, status="error").inc()
+            llm_requests_total.labels(provider=provider, status_code="500").inc()
             error_event = {"error": {"message": str(exc), "type": "provider_error"}}
             yield f"data: {json.dumps(error_event)}\n\n"
             yield "data: [DONE]\n\n"
             return
 
-        llm_latency_seconds.observe(time.perf_counter() - t0)
-        llm_requests_total.labels(provider=provider, status="success").inc()
+        llm_latency_seconds.labels(provider=provider).observe(time.perf_counter() - t0)
+        llm_requests_total.labels(provider=provider, status_code="200").inc()
 
         # Apply response filter to accumulated content and emit correction if needed.
         if settings.detection_enabled and chunks:

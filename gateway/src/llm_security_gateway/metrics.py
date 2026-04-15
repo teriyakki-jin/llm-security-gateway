@@ -21,13 +21,20 @@ detection_latency_seconds = Histogram(
 llm_requests_total = Counter(
     "gateway_llm_requests_total",
     "Total requests forwarded to LLM providers",
-    ["provider", "status"],  # status: "success" | "error"
+    ["provider", "status_code"],  # status_code: "200" | "429" | "500" | ...
 )
 
 llm_latency_seconds = Histogram(
     "gateway_llm_latency_seconds",
     "Round-trip latency for LLM provider calls in seconds",
-    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
+    ["provider"],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0],
+)
+
+llm_tokens_total = Counter(
+    "gateway_llm_tokens_total",
+    "Total tokens consumed by LLM providers",
+    ["provider", "model", "type"],  # type: "prompt" | "completion"
 )
 
 # ── Admin state gauges ────────────────────────────────────────
