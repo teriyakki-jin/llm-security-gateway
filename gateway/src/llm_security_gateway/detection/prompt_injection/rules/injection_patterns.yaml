@@ -1,0 +1,115 @@
+---
+# Prompt Injection Detection Rules
+# severity: low | medium | high | critical
+# confidence: 0.0 – 1.0 (how reliably this pattern signals injection)
+# Each pattern is a Python-compatible regex.
+
+categories:
+
+  instruction_override:
+    description: "Attempts to override system instructions"
+    severity: critical
+    confidence: 0.95
+    patterns:
+      - regex: "ignore\\s+(all\\s+)?(previous|prior|above|earlier)\\s+(instructions?|prompts?|rules?|directions?|context)"
+        label: instruction_override_ignore
+      - regex: "disregard\\s+(all\\s+)?(previous|prior|above|earlier|your)"
+        label: instruction_override_disregard
+      - regex: "forget\\s+(everything|all|what|your)"
+        label: instruction_override_forget
+      - regex: "do\\s+not\\s+follow\\s+(your|the|any|those)"
+        label: instruction_override_do_not_follow
+      - regex: "override\\s+(your\\s+)?(instructions?|programming|training|rules?|guidelines?)"
+        label: instruction_override_explicit
+      - regex: "you\\s+are\\s+(no\\s+longer|not\\s+an?|now\\s+free\\s+from)"
+        label: instruction_override_identity
+
+  role_manipulation:
+    description: "Attempts to make the model adopt a different persona"
+    severity: high
+    confidence: 0.85
+    patterns:
+      - regex: "you\\s+are\\s+now\\s+(an?\\s+)?(?!assistant|helpful|AI)[a-z\\s]{2,30}"
+        label: role_play_you_are_now
+      - regex: "act\\s+as\\s+(if\\s+you\\s+(are|were)\\s+)?(an?\\s+)?(?!assistant)[a-z\\s]{2,30}"
+        label: role_play_act_as
+      - regex: "pretend\\s+(to\\s+be|you\\s+are|that\\s+you)"
+        label: role_play_pretend
+      - regex: "roleplay\\s+as|role\\s*-?play(ing)?\\s+as"
+        label: role_play_explicit
+      - regex: "imagine\\s+you\\s+(are|have|were|can)"
+        label: role_play_imagine
+      - regex: "simulate\\s+(being|a|an)\\s+[a-z\\s]{2,20}"
+        label: role_play_simulate
+
+  system_prompt_extraction:
+    description: "Attempts to extract or reveal the system prompt"
+    severity: critical
+    confidence: 0.97
+    patterns:
+      - regex: "(?:reveal|show|print|output|repeat|tell me|what is|display)\\s+(?:me\\s+)?(?:your\\s+)?(?:system\\s+prompt|instructions?|initial\\s+prompt|original\\s+prompt)"
+        label: extract_system_prompt
+      - regex: "what\\s+(were|are)\\s+you\\s+(told|instructed|programmed|trained|asked)"
+        label: extract_instructions
+      - regex: "repeat\\s+(everything|all|the\\s+text)\\s+(above|before|prior)"
+        label: extract_repeat_above
+      - regex: "translate\\s+your\\s+(prompt|instructions?)\\s+to"
+        label: extract_via_translation
+
+  delimiter_abuse:
+    description: "Abuses delimiters to inject new instructions"
+    severity: high
+    confidence: 0.80
+    patterns:
+      - regex: "-{5,}|={5,}|#{5,}|\\*{5,}"
+        label: delimiter_separator
+      - regex: "\\[INST\\]|\\[/INST\\]|<\\|im_start\\|>|<\\|im_end\\|>"
+        label: delimiter_llm_tokens
+      - regex: "\\[SYSTEM\\]|\\[USER\\]|\\[ASSISTANT\\]"
+        label: delimiter_role_tags
+      - regex: "```[\\s\\S]{0,20}system|```[\\s\\S]{0,20}instruction"
+        label: delimiter_code_block_injection
+
+  encoding_evasion:
+    description: "Uses encoding to bypass text-based filters"
+    severity: high
+    confidence: 0.75
+    patterns:
+      - regex: "(?:[A-Za-z0-9+/]{4}){4,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?"
+        label: encoding_base64
+      - regex: "(?:\\\\u[0-9a-fA-F]{4}){3,}"
+        label: encoding_unicode_escape
+      - regex: "(?:&#[0-9]{2,4};){3,}"
+        label: encoding_html_entities
+      - regex: "(?:%[0-9a-fA-F]{2}){5,}"
+        label: encoding_url_percent
+
+  jailbreak_keywords:
+    description: "Known jailbreak trigger phrases"
+    severity: high
+    confidence: 0.88
+    patterns:
+      - regex: "DAN\\s+(mode|prompt|jailbreak)|do\\s+anything\\s+now"
+        label: jailbreak_dan
+      - regex: "developer\\s+mode|jailbreak\\s+mode|god\\s+mode"
+        label: jailbreak_mode
+      - regex: "no\\s+(restrictions?|limits?|filters?|censorship|guidelines?)"
+        label: jailbreak_no_restrictions
+      - regex: "you\\s+(must|have\\s+to|should)\\s+(comply|obey|follow|answer)"
+        label: jailbreak_must_comply
+      - regex: "hypothetically\\s+speaking.*?(how|what|explain|describe)"
+        label: jailbreak_hypothetical
+
+  korean_patterns:
+    description: "Korean-language injection patterns"
+    severity: high
+    confidence: 0.85
+    patterns:
+      - regex: "이전\\s*(지시|명령|규칙|설정).*?(무시|잊어|따르지)"
+        label: korean_instruction_override
+      - regex: "(지금부터|앞으로).*?(역할|캐릭터|모드).*?(변경|바꿔|해줘)"
+        label: korean_role_change
+      - regex: "시스템\\s*(프롬프트|지시|설정).*?(알려|보여|출력)"
+        label: korean_extract_system
+      - regex: "제한\\s*(없이|을\\s*무시|을\\s*풀어)"
+        label: korean_no_restriction

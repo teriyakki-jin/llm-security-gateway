@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,23 +22,35 @@ import (
 
 // PQCReverseProxy handles PQC handshakes and proxies decrypted traffic
 // to the downstream gateway.
+//
+// Session lifecycle:
+//  1. Client GETs /pqc/keys → receives server public keys.
+//  2. Client POSTs /pqc/handshake → 4-way handshake, session stored in Redis.
+//  3. Client POSTs /pqc/finished → Finished MAC verified, session activated.
+//  4. Subsequent requests use X-Session-ID to resume without re-handshake.
+//  5. Sessions expire after 1 hour (sliding TTL on each use).
 type PQCReverseProxy struct {
-	target   *url.URL
-	proxy    *httputil.ReverseProxy
-	sessions sync.Map // requestID → *transport.SessionState
-	log      *zap.Logger
+	target       *url.URL
+	proxy        *httputil.ReverseProxy
+	// hotSessions caches recently used sessions in memory to avoid Redis RTT
+	// on every request. Evicted after 5 minutes of local inactivity.
+	hotSessions  sync.Map // sessionID → *transport.SessionState
+	sessionStore *transport.SessionStore
+	log          *zap.Logger
 }
 
 // NewPQCReverseProxy creates a proxy that forwards decrypted requests to targetURL.
-func NewPQCReverseProxy(targetURL string, log *zap.Logger) (*PQCReverseProxy, error) {
+// store may be nil — in that case sessions are kept in memory only (no resumption across restarts).
+func NewPQCReverseProxy(targetURL string, store *transport.SessionStore, log *zap.Logger) (*PQCReverseProxy, error) {
 	target, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse target url: %w", err)
 	}
 
 	p := &PQCReverseProxy{
-		target: target,
-		log:    log,
+		target:       target,
+		sessionStore: store,
+		log:          log,
 	}
 
 	p.proxy = &httputil.ReverseProxy{
@@ -82,14 +95,25 @@ func (p *PQCReverseProxy) HandshakeHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Store session keyed by a session ID derived from the client nonce.
 	sessionID := fmt.Sprintf("%x", clientHello.Nonce)
-	p.sessions.Store(sessionID, session)
 
-	// Schedule session cleanup after 1 hour.
+	// Store in hot (in-memory) cache for immediate use.
+	p.hotSessions.Store(sessionID, session)
+
+	// Persist to Redis for session resumption across restarts / instances.
+	if p.sessionStore != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := p.sessionStore.Save(ctx, sessionID, session); err != nil {
+			p.log.Warn("session_store_save_failed", zap.String("session", sessionID), zap.Error(err))
+			// Non-fatal: session still works from hot cache.
+		}
+	}
+
+	// Evict from hot cache after 1 hour regardless of Redis state.
 	go func() {
 		time.Sleep(time.Hour)
-		p.sessions.Delete(sessionID)
+		p.hotSessions.Delete(sessionID)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -107,9 +131,9 @@ func (p *PQCReverseProxy) FinishedHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	raw, ok := p.sessions.Load(sessionID)
+	raw, ok := p.hotSessions.Load(sessionID)
 	if !ok {
-		http.Error(w, "session not found", http.StatusUnauthorized)
+		http.Error(w, "session not found — complete handshake first", http.StatusUnauthorized)
 		return
 	}
 	session := raw.(*transport.SessionState)
@@ -122,7 +146,10 @@ func (p *PQCReverseProxy) FinishedHandler(w http.ResponseWriter, r *http.Request
 
 	if err := transport.VerifyFinished(session, &finished); err != nil {
 		p.log.Warn("finished verification failed", zap.String("session", sessionID), zap.Error(err))
-		p.sessions.Delete(sessionID)
+		p.hotSessions.Delete(sessionID)
+		if p.sessionStore != nil {
+			p.sessionStore.Delete(context.Background(), sessionID) //nolint:errcheck
+		}
 		http.Error(w, "handshake verification failed", http.StatusUnauthorized)
 		return
 	}
@@ -140,12 +167,16 @@ func (p *PQCReverseProxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, ok := p.sessions.Load(sessionID)
-	if !ok {
-		http.Error(w, "session not found or expired", http.StatusUnauthorized)
+	session, err := p.loadSession(r.Context(), sessionID)
+	if err != nil {
+		p.log.Error("session load error", zap.String("session", sessionID), zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	session := raw.(*transport.SessionState)
+	if session == nil {
+		http.Error(w, "session not found or expired — re-handshake required", http.StatusUnauthorized)
+		return
+	}
 
 	// Read and decrypt request body.
 	encrypted, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10 MB limit
@@ -199,6 +230,36 @@ func (p *PQCReverseProxy) KeyServerHandler(serverKP *kem.HybridKeyPair) http.Han
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	}
+}
+
+// loadSession looks up a session: hot cache first, then Redis (session resumption).
+// Returns (nil, nil) if not found anywhere.
+func (p *PQCReverseProxy) loadSession(ctx context.Context, sessionID string) (*transport.SessionState, error) {
+	// 1. Hot cache hit — no Redis RTT.
+	if raw, ok := p.hotSessions.Load(sessionID); ok {
+		return raw.(*transport.SessionState), nil
+	}
+
+	// 2. Redis lookup — session resumption after proxy restart or cross-instance.
+	if p.sessionStore == nil {
+		return nil, nil
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond) // strict SLO
+	defer cancel()
+
+	state, err := p.sessionStore.Load(rctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("redis session load: %w", err)
+	}
+	if state == nil {
+		return nil, nil // not found
+	}
+
+	// Warm the hot cache so subsequent requests skip Redis.
+	p.hotSessions.Store(sessionID, state)
+	p.log.Info("session_resumed_from_redis", zap.String("session", sessionID))
+	return state, nil
 }
 
 // responseRecorder captures an HTTP response for post-processing.
