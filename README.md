@@ -188,8 +188,8 @@ session_key = HKDF-SHA256(
 ## 블로그 시리즈
 
 - [1편: ML-KEM-768 Go 구현기](https://velog.io/@jyg3485/LLM-Security-Gateway-개발기-1편)
-- [2편: FastAPI 게이트웨이 설계기](https://velog.io/@jyg3485)
-- 3편: Prompt Injection 탐지 엔진 딥다이브 (예정)
+- [2편: FastAPI 게이트웨이 설계기](https://velog.io/@jyg3485/LLM-Security-Gateway-개발기-2편-FastAPI-게이트웨이-설계)
+- [3편: Prompt Injection 탐지 엔진 딥다이브](https://velog.io/@jyg3485/LLM-Security-Gateway-개발기-3편-Prompt-Injection-탐지-엔진-딥다이브)
 
 ---
 
