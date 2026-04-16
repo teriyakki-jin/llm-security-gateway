@@ -67,7 +67,17 @@ addopts = "--cov=llm_security_gateway --cov-report=term-missing --cov-fail-under
 
 [tool.coverage.run]
 source = ["src/llm_security_gateway"]
-omit = ["*/migrations/*", "*/tests/*"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    # Infrastructure — covered by integration/e2e tests, not unit tests
+    "*/main.py",
+    "*/api/middleware/audit_log.py",
+    "*/api/middleware/rate_limit.py",
+    "*/api/middleware/request_id.py",
+    "*/storage/database.py",
+    "*/storage/models.py",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests"]
