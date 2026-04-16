@@ -1,5 +1,6 @@
 """POST /v1/chat/completions — proxies requests to the configured LLM provider."""
 
+import asyncio
 import json
 import time
 import uuid
@@ -10,11 +11,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from llm_security_gateway.config import GatewaySettings, get_settings
-from llm_security_gateway.dependencies import get_detection_engine, get_response_filter
+from llm_security_gateway.dependencies import get_detection_engine, get_llm_client, get_response_filter
 from llm_security_gateway.detection.data_leakage.response_filter import ResponseFilter
 from llm_security_gateway.detection.engine import DetectionEngine
 from llm_security_gateway.llm_clients.base import BaseLLMClient, Message
-from llm_security_gateway.llm_clients.factory import create_client
 from llm_security_gateway.metrics import llm_latency_seconds, llm_requests_total, llm_tokens_total
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -57,20 +57,24 @@ class ChatResponse(BaseModel):
 
 # ── Route ─────────────────────────────────────────────────────
 
-@router.post("/chat/completions")
+@router.post("/chat/completions", response_model=None)
 async def chat_completions(
     body: ChatRequest,
     request: Request,
     settings: GatewaySettings = Depends(get_settings),
     engine: DetectionEngine = Depends(get_detection_engine),
     resp_filter: ResponseFilter = Depends(get_response_filter),
+    client: BaseLLMClient = Depends(get_llm_client),
 ) -> ChatResponse | StreamingResponse:
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     # ── Request Detection ─────────────────────────────────────
     if settings.detection_enabled:
         full_text = " ".join(m.content for m in body.messages)
-        detection_result = engine.analyze(full_text, request_id=request_id)
+        # Run CPU-bound detection in a thread to avoid blocking the event loop.
+        detection_result = await asyncio.to_thread(
+            engine.analyze, full_text, request_id=request_id
+        )
         request.state.detection_result = detection_result
 
         if detection_result.is_blocked:
@@ -84,9 +88,7 @@ async def chat_completions(
                 headers={"X-Risk-Score": str(detection_result.risk_score)},
             )
 
-    # ── Build LLM client ──────────────────────────────────────
-    client: BaseLLMClient = create_client(settings.default_provider, settings)
-
+    # ── Dispatch ──────────────────────────────────────────────
     try:
         if body.stream:
             return await _handle_streaming(
@@ -105,14 +107,12 @@ async def chat_completions(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         llm_requests_total.labels(provider=settings.default_provider, status_code="500").inc()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"LLM provider error: {exc}",
-        ) from exc
-    finally:
-        await client.close()
+            detail="LLM provider error. Please try again later.",
+        )
 
 
 # ── Blocking (non-streaming) ──────────────────────────────────
@@ -147,7 +147,9 @@ async def _handle_blocking(
 
     content = llm_response.content
     if settings.detection_enabled:
-        content, _ = resp_filter.filter(content, request_id=request_id)
+        content, _ = await asyncio.to_thread(
+            resp_filter.filter, content, request_id=request_id
+        )
 
     return ChatResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -156,7 +158,7 @@ async def _handle_blocking(
             ChatChoice(
                 index=0,
                 message=ChatMessage(role="assistant", content=content),
-                finish_reason="stop",
+                finish_reason=llm_response.finish_reason,
             )
         ],
         usage=ChatUsage(
@@ -185,23 +187,22 @@ async def _handle_streaming(
         t0 = time.perf_counter()
 
         try:
-            async for delta in await client.stream_chat(
+            async for delta in client.stream_chat(
                 messages=[Message(role=m.role, content=m.content) for m in body.messages],
                 model=body.model,
                 temperature=body.temperature,
                 max_tokens=body.max_tokens,
             ):
                 chunks.append(delta)
-                event = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(event)}\n\n"
 
-        except Exception as exc:
+        except Exception:
             llm_requests_total.labels(provider=provider, status_code="500").inc()
-            error_event = {"error": {"message": str(exc), "type": "provider_error"}}
+            error_event = {
+                "error": {
+                    "message": "LLM provider error. Please try again later.",
+                    "type": "provider_error",
+                }
+            }
             yield f"data: {json.dumps(error_event)}\n\n"
             yield "data: [DONE]\n\n"
             return
@@ -209,24 +210,23 @@ async def _handle_streaming(
         llm_latency_seconds.labels(provider=provider).observe(time.perf_counter() - t0)
         llm_requests_total.labels(provider=provider, status_code="200").inc()
 
-        # Apply response filter to accumulated content and emit correction if needed.
-        if settings.detection_enabled and chunks:
-            accumulated = "".join(chunks)
-            filtered, was_filtered = resp_filter.filter(accumulated, request_id=request_id)
-            if was_filtered:
-                correction = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": ""},
-                            "finish_reason": None,
-                            "filter_applied": True,
-                        }
-                    ],
-                }
-                yield f"data: {json.dumps(correction)}\n\n"
+        # Buffer all chunks and apply the response filter before sending to the
+        # client. Filtering after streaming would expose sensitive data that has
+        # already reached the user — this is the secure approach.
+        accumulated = "".join(chunks)
+        if settings.detection_enabled and accumulated:
+            accumulated, _ = await asyncio.to_thread(
+                resp_filter.filter, accumulated, request_id=request_id
+            )
+
+        # Emit filtered content as a single SSE chunk.
+        if accumulated:
+            event = {
+                "id": stream_id,
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": accumulated}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(event)}\n\n"
 
         # Final SSE done marker.
         done_event = {

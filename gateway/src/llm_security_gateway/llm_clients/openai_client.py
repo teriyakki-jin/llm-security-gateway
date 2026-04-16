@@ -50,6 +50,7 @@ class OpenAIClient(BaseLLMClient):
         return LLMResponse(
             content=choice["message"]["content"],
             model=data["model"],
+            finish_reason=choice.get("finish_reason") or "stop",
             usage=Usage(
                 prompt_tokens=usage_data.get("prompt_tokens", 0),
                 completion_tokens=usage_data.get("completion_tokens", 0),

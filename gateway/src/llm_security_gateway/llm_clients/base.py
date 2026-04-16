@@ -23,6 +23,7 @@ class LLMResponse:
     content: str
     model: str
     usage: Usage
+    finish_reason: str = "stop"
     raw_response: dict = field(default_factory=dict)
 
 

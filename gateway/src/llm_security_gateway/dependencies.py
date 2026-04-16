@@ -12,6 +12,8 @@ from llm_security_gateway.detection.jailbreak.semantic_classifier import Semanti
 from llm_security_gateway.detection.prompt_injection.heuristic_detector import HeuristicDetector
 from llm_security_gateway.detection.prompt_injection.ml_detector import MLDetector
 from llm_security_gateway.detection.prompt_injection.rule_detector import RuleDetector
+from llm_security_gateway.llm_clients.base import BaseLLMClient
+from llm_security_gateway.llm_clients.factory import create_client
 
 
 @lru_cache(maxsize=1)
@@ -44,3 +46,10 @@ def get_detection_engine() -> DetectionEngine:
 @lru_cache(maxsize=1)
 def get_response_filter() -> ResponseFilter:
     return ResponseFilter()
+
+
+@lru_cache(maxsize=1)
+def get_llm_client() -> BaseLLMClient:
+    """Return a singleton LLM client (connection pool is reused across requests)."""
+    settings: GatewaySettings = get_settings()
+    return create_client(settings.default_provider, settings)

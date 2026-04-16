@@ -53,10 +53,14 @@ class AnthropicClient(BaseLLMClient):
 
         content_block = data["content"][0]
         usage_data = data.get("usage", {})
+        # Map Anthropic stop_reason → OpenAI-compatible finish_reason.
+        stop_reason = data.get("stop_reason", "end_turn")
+        finish_reason = "length" if stop_reason == "max_tokens" else "stop"
 
         return LLMResponse(
             content=content_block["text"],
             model=data["model"],
+            finish_reason=finish_reason,
             usage=Usage(
                 prompt_tokens=usage_data.get("input_tokens", 0),
                 completion_tokens=usage_data.get("output_tokens", 0),

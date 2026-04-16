@@ -52,6 +52,11 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
 
         await redis.aclose()
         await dispose_db()
+
+        # Close shared LLM client connection pool.
+        from llm_security_gateway.dependencies import get_llm_client
+        await get_llm_client().close()
+
         logger.info("shutdown_complete")
 
     app = FastAPI(
