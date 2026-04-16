@@ -24,53 +24,8 @@ LLM Security Gateway는 두 레이어로 구성됩니다.
 
 ## 아키텍처
 
-```
- Client
-   │  HTTPS (ML-KEM-768/X25519 hybrid)
-   ▼
-┌─────────────────────────────────────────────────────┐
-│                  PQC Proxy (Go)                      │
-│                                                      │
-│  4-Way Handshake                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │ 1. ClientHello  (X25519 pub + ML-KEM pub)    │   │
-│  │ 2. ServerHello  (HybridCiphertext + nonces)  │   │
-│  │ 3. [client derives session key via HKDF]     │   │
-│  │ 4. Finished     (HMAC-SHA256 transcript)     │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                      │
-│  Session: AES-256-GCM + counter nonce anti-replay   │
-│  Session Store: sync.Map (hot) → Redis (persistent) │
-└──────────────────────┬──────────────────────────────┘
-                       │ internal HTTP
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│              Security Gateway (FastAPI)              │
-│                                                      │
-│  Middleware Stack                                    │
-│  ┌─────────────────────────────────────────────┐   │
-│  │  RequestID → AuditLog → RateLimit (Redis)   │   │
-│  └─────────────────────────────────────────────┘   │
-│                                                      │
-│  Detection Pipeline (cheapest → most expensive)     │
-│  ┌──────────┐  ┌───────────┐  ┌─────────────────┐  │
-│  │  Rules   │→ │ Heuristic │→ │  ML (DeBERTa)   │  │
-│  │ (~0.1ms) │  │ (~0.5ms)  │  │   (~20-50ms)    │  │
-│  └──────────┘  └───────────┘  └─────────────────┘  │
-│       ↑ early exit on score ≥ 0.99                  │
-│                                                      │
-│  Jailbreak: Pattern + Semantic (MiniLM cosine sim)  │
-│  Response:  PII (Presidio) + Secret masking         │
-│                                                      │
-│  Shadow Mode: log-only, never block — safe rollout  │
-│  Prometheus: /metrics                                │
-│  Admin API:  /admin/shadow-mode, /admin/threshold   │
-└──────────────────────┬──────────────────────────────┘
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-          OpenAI API      Anthropic API
-```
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/e9dd786b-46ad-4f12-b788-eaf351cbcb7b" />
+
 
 ---
 
