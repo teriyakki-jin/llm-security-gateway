@@ -187,7 +187,7 @@ async def _handle_streaming(
         t0 = time.perf_counter()
 
         try:
-            async for delta in await client.stream_chat(
+            async for delta in client.stream_chat(
                 messages=[Message(role=m.role, content=m.content) for m in body.messages],
                 model=body.model,
                 temperature=body.temperature,
