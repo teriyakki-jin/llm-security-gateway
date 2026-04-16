@@ -23,9 +23,9 @@ LLM Security Gateway는 두 레이어로 구성됩니다.
 ---
 
 ## 아키텍처
-
+'''
 <img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/e9dd786b-46ad-4f12-b788-eaf351cbcb7b" />
-
+'''
 
 ---
 
