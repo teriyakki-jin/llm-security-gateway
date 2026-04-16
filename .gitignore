@@ -45,3 +45,6 @@ Thumbs.db
 
 # Docker
 *.tar
+
+# Collaboration (local only)
+COLLAB.md
